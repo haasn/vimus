@@ -35,3 +35,9 @@ addPlaylistSong plist index = do
   mapM_ deleteId $ first ++ rest
 
   return this
+
+-- a copy of System.Process.Internals.translate
+posixEscape :: String -> String
+posixEscape str = '\'' : foldr escape "'" str
+  where escape '\'' = showString "'\\''"
+        escape c    = showChar c

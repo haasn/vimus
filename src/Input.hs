@@ -10,9 +10,10 @@ import           Prelude hiding (getChar)
 
 import           System.IO.Unsafe (unsafePerformIO)
 import           Data.IORef
+import qualified Data.Char as Char
 import           Control.Monad.Trans (MonadIO, liftIO)
 
-import           UI.Curses hiding (wgetch, ungetch, wchgat)
+import           UI.Curses hiding (wgetch, ungetch, wchgat, mvwchgat)
 import qualified UI.Curses as Curses
 import           WindowLayout
 
@@ -42,6 +43,56 @@ wgetch win = liftIO $ do
 
 ------------------------------------------------------------------------
 
+-- | just a zipper
+data InputState = InputState !String !String
+
+goLeft :: InputState -> InputState
+goLeft (InputState (x:xs) ys) = InputState xs (x:ys)
+goLeft s = s
+
+goRight :: InputState -> InputState
+goRight (InputState xs (y:ys)) = InputState (y:xs) ys
+goRight s = s
+
+goFirst :: InputState -> InputState
+goFirst (InputState xs ys) = InputState [] (reverse xs ++ ys)
+
+goLast :: InputState -> InputState
+goLast (InputState xs ys) = InputState (reverse ys ++ xs) []
+
+toString :: InputState -> String
+toString (InputState prev next) = reverse prev ++ next
+
+updateWindow :: Window -> String -> InputState -> IO ()
+updateWindow window prompt (InputState prev next) = do
+  mvwaddstr window 0 0 prompt
+  waddstr window (reverse prev)
+  waddstr window next
+  mvwchgat window 0 (length prompt + length prev) 1 [Reverse] InputColor
+  return ()
+
+data EditState = Accept String | Continue InputState | Cancel
+
+edit :: InputState -> Char -> EditState
+edit s@(InputState prev next) c
+  | accept c          = Accept (toString s)
+  | cancel c          = Cancel
+  | c == keyLeft      = Continue (goLeft s)
+  | c == keyRight     = Continue (goRight s)
+  | c == keyBackspace = backspace
+  | c == keyHome      = Continue (goFirst s)
+  | c == keyEnd       = Continue (goLast s)
+  | Char.isControl c  = Continue s
+  | otherwise         = Continue (InputState (c:prev) next)
+  where
+    accept = (`elem` ['\n', keyEnter])
+    cancel = (`elem` ['\ETX', '\ESC'])
+
+    backspace = case s of
+      InputState "" ""     -> Cancel
+      InputState "" _      -> Continue s
+      InputState (_:xs) ys -> Continue (InputState xs ys)
+
 -- | Read a line of user input.
 readline_ :: (MonadIO m) => Window -> Char -> m Char -> m (Maybe String)
 readline_ = readline (const $ return ())
@@ -50,31 +101,15 @@ readline_ = readline (const $ return ())
 --
 -- Apply given action on each keystroke to intermediate result.
 readline :: (MonadIO m) => (String -> m ()) -> Window -> Char -> m Char -> m (Maybe String)
-readline action win prompt getChar = do
-  liftIO $ mvwaddstr win 0 0 [prompt]
-  r <- _readline ""
-  liftIO $ werase win
-  return r
-
+readline action window prompt getChar = liftIO (werase window) >> go (InputState "" "")
   where
-    _readline str = do
-      action str
-      liftIO $ do
-        mvwaddstr win 0 1 str
-        wclrtoeol win
-        wchgat win 1 [Reverse] InputColor
+    go str = do
+      action (toString str)
+      liftIO $ updateWindow window [prompt] str
 
       c <- getChar
-
-      let continue | accept c          = return $ Just str
-                   | cancel c          = return Nothing
-                   | c == keyBackspace = backspace str
-                   | otherwise         = _readline $ str ++ [c]
-      continue
-
-      where
-        accept = (`elem` ['\n', keyEnter])
-        cancel = (`elem` ['\ETX', '\ESC'])
-
-        backspace [] = return Nothing
-        backspace s = _readline $ init s
+      liftIO (werase window)
+      case str `edit` c of
+        Accept s   -> return (Just s)
+        Cancel     -> return Nothing
+        Continue s -> go s

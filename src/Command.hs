@@ -9,6 +9,7 @@ module Command (
 -- * exported for testing
 , argumentErrorMessage
 , parseCommand
+, parseMapping
 ) where
 
 import           Data.List
@@ -21,6 +22,7 @@ import           System.Cmd (system)
 import           Control.Monad.State (gets, get, modify, liftIO)
 import           Control.Monad.Error (catchError)
 import           Control.Monad
+import           Control.Applicative
 
 import           Network.MPD ((=?), Seconds)
 import qualified Network.MPD as MPD hiding (withMPD)
@@ -29,11 +31,10 @@ import           UI.Curses hiding (wgetch, ungetch, mvaddstr, err)
 
 import           Vimus
 import qualified ListWidget
-import           Util (maybeRead, match, MatchResult(..), addPlaylistSong)
+import           Util (maybeRead, match, MatchResult(..), addPlaylistSong, posixEscape)
 import           Content
 
-import           System.FilePath (takeFileName)
-import           CommandParser
+import           System.FilePath (takeFileName, (</>))
 
 
 command :: String -> (String -> Vimus ()) -> Command
@@ -54,7 +55,7 @@ command2 name action = Command name (Action2 action)
 commands :: [Command]
 commands = [
     command0 "help"               $ setCurrentView Help
-  , command2 "map"                $ addMapping
+  , command  "map"                $ addMapping
   , command0 "exit"               $ liftIO exitSuccess
   , command0 "quit"               $ liftIO exitSuccess
 
@@ -71,6 +72,8 @@ commands = [
   , command0 "toggle-consume"     $ MPD.status >>= MPD.consume . not . MPD.stConsume
   , command0 "toggle-random"      $ MPD.status >>= MPD.random  . not . MPD.stRandom
   , command0 "toggle-single"      $ MPD.status >>= MPD.single  . not . MPD.stSingle
+
+  , command1 "set-library-path"   $ setLibraryPath
 
   , command0 "next"               $ MPD.next
   , command0 "previous"           $ MPD.previous
@@ -95,14 +98,7 @@ commands = [
   , command0 "window-next"        $ nextView
   , command0 "window-prev"        $ previousView
 
-  -- run shell command
-  , command "!" $ \s -> liftIO $ do
-      endwin
-      e <- system s
-      case e of
-        ExitSuccess   -> return ()
-        ExitFailure n -> putStrLn ("shell returned " ++ show n)
-      void getChar
+  , command  "!"                  $ runShellCommand
 
   , command1 "seek" $ \s -> do
       let err = (printStatus $ "invalid argument: '" ++ s ++ "'!")
@@ -170,10 +166,37 @@ commands = [
           Nothing -> list
   ]
 
+getCurrentPath :: Vimus (Maybe FilePath)
+getCurrentPath = do
+  mBasePath <- gets libraryPath
+  mPath <- withCurrentItem $ \item -> do
+    case item of
+      Dir path  -> return (Just path)
+      PList l   -> return (Just l)
+      Song song -> return (Just $ MPD.sgFilePath song)
+
+  return $ (mBasePath `append` mPath) <|> mBasePath
+  where
+    append = liftA2 (</>)
+
+
+expandCurrentPath :: String -> Maybe String -> Either String String
+expandCurrentPath s mPath = go s
+  where
+    go ""             = return ""
+    go ('\\':'\\':xs) = ('\\':) `fmap` go xs
+    go ('\\':'%':xs)  = ('%':)  `fmap` go xs
+    go ('%':xs)       = case mPath of
+                          Nothing -> Left "Path to music library is not set, hence % can not be used!"
+                          Just p  -> (posixEscape p ++) `fmap` go xs
+    go (x:xs)         = (x:) `fmap` go xs
+
 parseCommand :: String -> (String, String)
-parseCommand s = case  dropWhile isSpace s of
-  '!' : xs -> ("!", xs)
-  xs       -> span (not . isSpace) xs
+parseCommand s = (name, dropWhile isSpace arg)
+  where
+    (name, arg) = case dropWhile isSpace s of
+      '!':xs -> ("!", xs)
+      xs     -> span (not . isSpace) xs
 
 -- | Evaluate command with given name
 eval :: String -> Vimus ()
@@ -236,11 +259,35 @@ commandMap = Map.fromList $ zip (map commandName commands) (map commandAction co
 ------------------------------------------------------------------------
 -- commands
 
-addMapping :: String -> String -> Vimus ()
-addMapping m arg =
-  case parseMappingArg arg of
-    Just x -> addMacro m x
-    Nothing -> printStatus ("invalid argument: " ++ show arg)
+runShellCommand :: String -> Vimus ()
+runShellCommand arg = (expandCurrentPath arg <$> getCurrentPath) >>= either printStatus action
+  where
+    action s = liftIO $ do
+      endwin
+      e <- system s
+      case e of
+        ExitSuccess   -> return ()
+        ExitFailure n -> putStrLn ("shell returned " ++ show n)
+      void getChar
+
+-- | Currently only <cr> is expanded to '\n'.
+expandKeyReferences :: String -> String
+expandKeyReferences s =
+  case s of
+    ""                 -> ""
+    '<':'c':'r':'>':xs -> '\n':expandKeyReferences xs
+    x:xs               ->    x:expandKeyReferences xs
+
+parseMapping :: String -> (String, String)
+parseMapping s =
+  case span (not . isSpace) (dropWhile isSpace s) of
+    (macro, expansion) -> (macro, (expandKeyReferences . dropWhile isSpace) expansion)
+
+addMapping :: String -> Vimus ()
+addMapping s = case parseMapping s of
+  ("", "") -> printStatus "not yet implemented" -- TODO: print all mappings
+  (_, "")  -> printStatus "not yet implemented" -- TODO: print mapping with given name
+  (m, e)   -> addMacro m e
 
 seek :: Seconds -> Vimus ()
 seek delta = do
