@@ -6,7 +6,7 @@ license:          MIT
 license-file:     LICENSE
 author:           Simon Hengel <sol@typeful.net>
 maintainer:       Simon Hengel <sol@typeful.net>
-build-type:       Simple
+build-type:       Custom
 cabal-version:    >= 1.10
 
 data-dir:
@@ -14,6 +14,9 @@ data-dir:
 data-files:
     default-mappings
     emacs-mappings
+
+extra-source-files:
+  ncursesw/src/mycurses.h
 
 source-repository head
     type:            git
@@ -28,7 +31,6 @@ executable vimus
 
   build-depends:
       base        >= 4.6
-    , ncursesw    == 0.0.0
     , wcwidth
     , libmpd      == 0.9.*
     , mtl         >= 2 && < 2.2
@@ -42,8 +44,12 @@ executable vimus
     , data-default
     , template-haskell
 
+    , bytestring
+    , utf8-string
+
   hs-source-dirs:
       src
+    , ncursesw/src
 
   main-is:
     Main.hs
@@ -81,6 +87,28 @@ executable vimus
     Data.List.Pointed
     Data.List.Zipper
 
+    -- ncursesw stuff
+    UI.Curses
+    UI.Curses.Key
+    UI.Curses.Type
+    Curses
+    Constant
+    CursesUtil
+    Misc
+    CursesInput
+
+  extra-libraries:
+    ncursesw
+
+  c-sources:
+    ncursesw/src/cbits.c
+
+  includes:
+    mycurses.h
+
+  include-dirs:
+    ncursesw/src/
+
 test-suite spec
   default-language: Haskell2010
   type:
@@ -100,7 +128,6 @@ test-suite spec
     , test
   build-depends:
       base        >= 4.6
-    , ncursesw    == 0.0.0
     , wcwidth
     , libmpd      == 0.9.*
     , mtl         >= 2 && < 2.2

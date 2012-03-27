@@ -25,4 +25,4 @@ main = defaultMainWithHooks simpleUserHooks {
               emptyBuildInfo {cppOptions = ["-DDEBIAN"], ccOptions = ["-DDEBIAN"], includes = ["/usr/include/ncursesw/ncurses.h"]}
             else
               emptyBuildInfo {includes = ["/usr/include/ncurses.h"]}
-      return (Just bi, [])
+      return (Nothing, [("vimus", bi)])

@@ -1,6 +1,9 @@
 language: haskell
 
-before_install:
+install:
     - cabal install c2hs
     - cd ncursesw && cabal install && cd ..
-    - git clone https://github.com/vimus/libmpd-haskell && cd libmpd-haskell && cabal install && cd ..
+    - git clone https://github.com/sol/libmpd-haskell && cd libmpd-haskell && cabal install && cd ..
+
+script:
+    - cabal sdist && cd dist && tar xvzf vimus-*.tar.gz && cd vimus-* && cabal install
